@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 type URLMetaData struct {
@@ -66,6 +69,29 @@ func (wc *WebCrawler) ProcessJob(cj CrawlJob) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+func (wc *WebCrawler) ExtractLinks(body []byte) []string {
+	doc, err := html.Parse(bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	links := make([]string, 0)
+	var f func(*html.Node)
+	f = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "a" {
+			for _, a := range n.Attr {
+				if a.Key == "href" {
+					links = append(links, a.Val)
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			f(c)
+		}
+	}
+	f(doc)
+	return links
+}
+
 func main() {
 	CRAWL_DEQUEUE = append(CRAWL_DEQUEUE, CrawlJob{"https://www.wikipedia.org/", 0})
 	wc := MakeWebCrawler("fabs_bot/1.0")
@@ -77,6 +103,6 @@ func main() {
 			fmt.Printf("Error occured: %s\n", err)
 			return
 		}
-		fmt.Printf("Content: \n%s\n", body)
+		fmt.Println(wc.ExtractLinks(body))
 	}
 }
