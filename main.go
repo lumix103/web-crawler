@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"golang.org/x/net/html"
@@ -69,18 +70,39 @@ func (wc *WebCrawler) ProcessJob(cj CrawlJob) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-func (wc *WebCrawler) ExtractLinks(body []byte) []string {
+func (wc *WebCrawler) ExtractLinks(body []byte, baseURL string) []string {
 	doc, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
 		return nil
 	}
+
+	base, err := url.Parse(baseURL)
+    if err != nil {
+        return nil
+    }
+
 	links := make([]string, 0)
 	var f func(*html.Node)
 	f = func(n *html.Node) {
 		if n.Type == html.ElementNode && n.Data == "a" {
 			for _, a := range n.Attr {
 				if a.Key == "href" {
-					links = append(links, a.Val)
+					link, err := url.Parse(a.Val)
+					if err != nil {
+						continue
+					}
+					absolute := base.ResolveReference(link)
+					if absolute.Scheme != "http" && absolute.Scheme != "https" {
+						continue
+					}
+
+					next := url.URL{
+                        Scheme: absolute.Scheme,
+                        Host:   absolute.Host,
+                        Path:   absolute.Path,
+                    }
+
+					links = append(links, next.String())
 				}
 			}
 		}
@@ -93,7 +115,7 @@ func (wc *WebCrawler) ExtractLinks(body []byte) []string {
 }
 
 func main() {
-	CRAWL_DEQUEUE = append(CRAWL_DEQUEUE, CrawlJob{"https://www.wikipedia.org/", 0})
+	CRAWL_DEQUEUE = append(CRAWL_DEQUEUE, CrawlJob{"https://en.wikipedia.org/wiki/Web_crawler", 0})
 	wc := MakeWebCrawler("fabs_bot/1.0")
 	for len(CRAWL_DEQUEUE) > 0 {
 		job := CRAWL_DEQUEUE[0]
@@ -103,6 +125,6 @@ func main() {
 			fmt.Printf("Error occured: %s\n", err)
 			return
 		}
-		fmt.Println(wc.ExtractLinks(body))
+		fmt.Println(wc.ExtractLinks(body, job.Link))
 	}
 }
