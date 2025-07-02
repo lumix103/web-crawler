@@ -45,10 +45,10 @@ The crawler starts with Wikipedia as a seed URL and outputs the fetched HTML con
 
 ## Next Steps
 
-- [ ] HTML parsing and link extraction
-- [ ] Duplicate URL detection
-- [ ] Robots.txt compliance
-- [ ] Domain-specific rate limiting
+- [x] HTML parsing and link extraction
+- [x] Duplicate URL detection
+- [x] Robots.txt compliance
+- [x] Domain-specific rate limiting
 - [ ] Concurrent processing with goroutines
 - [ ] External queue system integration (SQS/Kafka)
 

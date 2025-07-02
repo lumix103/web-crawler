@@ -180,6 +180,10 @@ func (wc *WebCrawler) ProcessRobotFile(link string) (DomainMetaData, error) {
 
 	disallowRules, allowRules, crawlDelay := parseRobotsTxt(resp.Body, wc.userAgent)
 
+	if crawlDelay == 0 {
+		crawlDelay = 1 * time.Second // Default politeness
+	}
+
 	u, err := url.Parse(link)
 	if err != nil {
 		return DomainMetaData{}, err
@@ -282,10 +286,21 @@ func main() {
 			if err != nil {
 				continue
 			}
+			domain_metadata.LastCrawlTime = time.Now().Add(-domain_metadata.CrawlDelay)
 			DOMAIN_METADATA_MAP[domain.Host] = domain_metadata
 		}
 
-		if result := DOMAIN_METADATA_MAP[domain.Host]; !result.IsPathAllowed(domain.Path) {
+		domain_metadata := DOMAIN_METADATA_MAP[domain.Host]
+        if !domain_metadata.LastCrawlTime.IsZero() && domain_metadata.CrawlDelay > 0 {
+            timeSinceLastCrawl := time.Since(domain_metadata.LastCrawlTime)
+            if timeSinceLastCrawl < domain_metadata.CrawlDelay {
+                waitTime := domain_metadata.CrawlDelay - timeSinceLastCrawl
+                fmt.Fprintf(file, "Waiting for %s due to crawl-delay for domain %s\n", waitTime, domain.Host)
+                time.Sleep(waitTime)
+            }
+        }
+
+		if !domain_metadata.IsPathAllowed(domain.Path) {
 			fmt.Fprintf(file, "Request to %s is not allowed\n", job.Link)
 			continue
 		}
@@ -306,6 +321,9 @@ func main() {
 			return
 		}
 
+		domain_metadata.LastCrawlTime = time.Now()
+		DOMAIN_METADATA_MAP[domain.Host] = domain_metadata
+
 		links := wc.ExtractLinks(body, job.Link)
 
 		fmt.Fprintf(file, "Crawled: %s\n", job.Link)
@@ -313,7 +331,7 @@ func main() {
 			fmt.Fprintf(file, "\tfound: %s\n", link)
 			CRAWL_DEQUEUE = append(CRAWL_DEQUEUE, CrawlJob{link, 0})
 		}
-		time.Sleep(10 * time.Second)
+
 	}
 }
 
