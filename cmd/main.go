@@ -13,7 +13,7 @@ import (
 
 const (
 	NumWorkers = 3
-	MaxJobs    = 20
+	MaxJobs    = 10
 )
 
 func main() {
@@ -33,7 +33,7 @@ func main() {
 		crawlers[i] = crawler.NewCrawler("fabs_bot/1.0", urls, domains, queue)
 	}
 
-	queue.Add(crawler.CrawlJob{Link: "https://en.wikipedia.org/wiki/Web_crawler", Retries: 0})
+	queue.Add(crawler.CrawlJob{Link: "https://en.wikipedia.org/wiki/Web_crawler", Retries: 0, Depth: 0})
 
 	resultChan := make(chan CrawlResult, MaxJobs)
 	doneChan := make(chan struct{})
@@ -132,19 +132,23 @@ func resultProcessor(resultChan <-chan CrawlResult, file *os.File, c *crawler.Cr
 	for result := range resultChan {
 		switch result.Status {
 		case "success":
-			fmt.Fprintf(file, "Crawled: %s\n", result.Job.Link)
-			c.MarkAsCrawled(result.Job.Link)
-			for _, link := range result.Links {
-				fmt.Fprintf(file, "\tfound: %s\n", link)
-				c.AddJobIfNotVisited(link, 0)
-			}
-		case "not_allowed":
+            fmt.Fprintf(file, "Crawled: %s (Depth: %d)\n", result.Job.Link, result.Job.Depth)
+            c.MarkAsCrawled(result.Job.Link, result.Job.Depth)
+			newDepth := result.Job.Depth + 1
+            for _, link := range result.Links {
+                fmt.Fprintf(file, "\tfound: %s\n", link)
+                // Add new jobs to the crawler's queue
+                if newDepth < 255 {
+                    c.AddJobIfNotVisited(link, 0, newDepth)
+                }
+            }
+        case "not_allowed":
 
 			fmt.Fprintf(file, "Request to %s is not allowed\n", result.Job.Link)
 		case "parse_error", "robots_error", "process_error":
 			fmt.Fprintf(file, "Error processing %s: %v\n", result.Job.Link, result.Error)
 			if (result.Job.Retries + 1 < crawler.MAX_RETRIES) {
-				c.AddJob(result.Job.Link, result.Job.Retries + 1)
+				c.AddJob(result.Job.Link, result.Job.Retries + 1, result.Job.Depth)
 			}
 		}
 	}

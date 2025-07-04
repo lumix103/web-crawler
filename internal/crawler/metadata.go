@@ -24,6 +24,7 @@ type DomainMetaData struct {
 type CrawlJob struct {
 	Link    string
 	Retries uint8
+	Depth   uint8
 }
 
 func (dm *DomainMetaData) IsPathAllowed(link string, robots_pkg func(string, string) bool) bool {
