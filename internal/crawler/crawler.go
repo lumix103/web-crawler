@@ -35,12 +35,22 @@ func NewCrawler(userAgent string, urls *URLMetadataManager, domains *DomainMetad
 	}
 }
 
-func (c *Crawler) AddJob(link string) {
-	c.queue.Add(CrawlJob{Link: link, Retries: 0})
+func (c *Crawler) AddJob(link string, retries uint8) {
+	c.queue.Add(CrawlJob{Link: link, Retries: retries})
 }
 
 func (c *Crawler) GetJob() (CrawlJob, bool) {
 	return c.queue.Next()
+}
+
+func (c *Crawler) MarkAsCrawled(link string) {
+	c.urls.Set(link, URLMetaData{Link: link, LastCrawlTime: time.Now()})
+}
+
+func (c *Crawler) AddJobIfNotVisited(link string, retries uint8) {
+	if c.urls.TestAndSet(link, URLMetaData{Link: link, LastCrawlTime: time.Now()}) {
+		c.AddJob(link, retries)
+	}
 }
 
 func (c *Crawler) ProcessRobotFile(link string) (DomainMetaData, error) {

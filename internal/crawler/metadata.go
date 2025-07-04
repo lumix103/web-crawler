@@ -65,6 +65,18 @@ func (m *URLMetadataManager) Get(url string) (URLMetaData, bool) {
 	return metadata, ok
 }
 
+// TestAndSet checks if a URL exists and sets it if it doesn't, all under a single lock.
+// It returns true if the URL was newly set, and false if it already existed.
+func (m *URLMetadataManager) TestAndSet(url string, metadata URLMetaData) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.Data[url]; ok {
+		return false // Already exists
+	}
+	m.Data[url] = metadata
+	return true // Was newly set
+}
+
 // DomainMetadataManager safely manages domain metadata.
 type DomainMetadataManager struct {
 	mu   sync.Mutex
