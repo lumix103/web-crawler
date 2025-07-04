@@ -49,7 +49,7 @@ The crawler starts with Wikipedia as a seed URL and outputs the fetched HTML con
 - [x] Duplicate URL detection
 - [x] Robots.txt compliance
 - [x] Domain-specific rate limiting
-- [ ] Concurrent processing with goroutines
+- [x] Concurrent processing with goroutines
 - [ ] External queue system integration (SQS/Kafka)
 
 ## Configuration
@@ -61,8 +61,5 @@ The crawler starts with Wikipedia as a seed URL and outputs the fetched HTML con
 ## Requirements
 
 - Go 1.21.0 or higher
-- No external dependencies (uses only standard library)
 
 ---
-
-_This is a learning project focused on understanding web crawling fundamentals before scaling to production-ready features._
