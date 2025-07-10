@@ -1,30 +1,38 @@
 package crawler
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type URLMetaData struct {
-	Link          string
-	LastCrawlTime time.Time
-	Depth         uint8
+	ID            primitive.ObjectID `bson:"_id,omitempty"`
+	Link          string             `bson:"link"`
+	LastCrawlTime time.Time          `bson:"last_crawl_time"`
+	Depth         uint8              `bson:"depth"`
 }
 
-// TODO: Consider turning the allow and disallow into a trie
 type DomainMetaData struct {
-	Domain        string
-	LastCrawlTime time.Time
-	UserAgent     string
-	Disallow      []string
-	Allow         []string
-	CrawlDelay    time.Duration
+	ID            primitive.ObjectID `bson:"_id,omitempty"`
+	Domain        string             `bson:"domain"`
+	LastCrawlTime time.Time          `bson:"last_crawl_time"`
+	UserAgent     string             `bson:"user_agent"`
+	Disallow      []string           `bson:"disallow"`
+	Allow         []string           `bson:"allow"`
+	CrawlDelay    time.Duration      `bson:"crawl_delay"`
 }
 
 type CrawlJob struct {
-	Link    string
-	Retries uint8
-	Depth   uint8
+	ID      primitive.ObjectID `bson:"_id,omitempty"`
+	Link    string             `bson:"link"`
+	Retries uint8              `bson:"retries"`
+	Depth   uint8              `bson:"depth"`
 }
 
 func (dm *DomainMetaData) IsPathAllowed(link string, robots_pkg func(string, string) bool) bool {
@@ -43,39 +51,66 @@ func (dm *DomainMetaData) IsPathAllowed(link string, robots_pkg func(string, str
 
 // URLMetadataManager safely manages URL metadata.
 type URLMetadataManager struct {
-	mu   sync.Mutex
-	Data map[string]URLMetaData
+	mu         sync.Mutex
+	db         *mongo.Database
+	collection *mongo.Collection
 }
 
-func NewURLMetadataManager() *URLMetadataManager {
+func NewURLMetadataManager(db mongo.Database) *URLMetadataManager {
 	return &URLMetadataManager{
-		Data: make(map[string]URLMetaData),
+		db:         &db,
+		collection: db.Collection("pages"),
 	}
 }
 
-func (m *URLMetadataManager) Set(url string, metadata URLMetaData) {
+func (m *URLMetadataManager) Set(url string, metadata URLMetaData) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Data[url] = metadata
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := m.collection.ReplaceOne(ctx, bson.M{"url": url},
+		metadata,
+		options.Replace().SetUpsert(true))
+
+	return err
 }
 
 func (m *URLMetadataManager) Get(url string) (URLMetaData, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	metadata, ok := m.Data[url]
-	return metadata, ok
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    
+    var metadata URLMetaData
+    err := m.collection.FindOne(ctx, bson.M{"url": url}).Decode(&metadata)
+    
+    if err != nil {
+        return URLMetaData{}, false
+    }
+    
+    return metadata, true
 }
 
-// TestAndSet checks if a URL exists and sets it if it doesn't, all under a single lock.
-// It returns true if the URL was newly set, and false if it already existed.
 func (m *URLMetadataManager) TestAndSet(url string, metadata URLMetaData) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.Data[url]; ok {
-		return false // Already exists
-	}
-	m.Data[url] = metadata
-	return true // Was newly set
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    
+    metadata.Link = url
+    metadata.LastCrawlTime = time.Now()
+    
+    // Insert only if document doesn't exist
+    _, err := m.collection.InsertOne(ctx, metadata)
+    
+    if err != nil {
+        // Check if error is due to duplicate key (URL already exists)
+        if mongo.IsDuplicateKeyError(err) {
+            return false // Already exists
+        }
+        // Other error (network, timeout, etc.) - treat as "didn't set"
+        return false
+    }
+    
+    return true // Was newly inserted
 }
 
 // DomainMetadataManager safely manages domain metadata.

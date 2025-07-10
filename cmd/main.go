@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"sync"
@@ -9,6 +11,10 @@ import (
 
 	"github.com/lumix103/web-crawler/internal/crawler"
 	"github.com/lumix103/web-crawler/internal/robots"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/joho/godotenv"
 )
 
 const (
@@ -17,20 +23,31 @@ const (
 )
 
 func main() {
-	file, err := os.Create("crawl_log.txt")
-	if err != nil {
-		fmt.Println("Error creating log file:", err)
-		return
-	}
-	defer file.Close()
+	err := godotenv.Load()
 
-	urls := crawler.NewURLMetadataManager()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+
+    client, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGODB_URI")))
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Disconnect(ctx)
+
+	db := client.Database("web-crawler")
+	
+	urls := crawler.NewURLMetadataManager(*db)
 	domains := crawler.NewDomainMetadataManager()
 	queue := crawler.NewCrawlQueue()
 
 	crawlers := make([]*crawler.Crawler, NumWorkers+1)
 	for i := 0; i < NumWorkers+1; i++ {
-		crawlers[i] = crawler.NewCrawler("fabs_bot/1.0", urls, domains, queue)
+		crawlers[i] = crawler.NewCrawler("fabs_bot/2.0", urls, domains, queue)
 	}
 
 	queue.Add(crawler.CrawlJob{Link: "https://en.wikipedia.org/wiki/Web_crawler", Retries: 0, Depth: 0})
@@ -44,7 +61,7 @@ func main() {
 		go worker(i, resultChan, crawlers[i], &wg)
 	}
 
-	go resultProcessor(resultChan, file, crawlers[NumWorkers], doneChan)
+	go resultProcessor(resultChan, crawlers[NumWorkers], doneChan)
 
 	wg.Wait()
 	close(resultChan)
@@ -128,15 +145,15 @@ func processJob(job crawler.CrawlJob, c *crawler.Crawler) CrawlResult {
 	return result
 }
 
-func resultProcessor(resultChan <-chan CrawlResult, file *os.File, c *crawler.Crawler, doneChan chan<- struct{}) {
+func resultProcessor(resultChan <-chan CrawlResult, c *crawler.Crawler, doneChan chan<- struct{}) {
 	for result := range resultChan {
 		switch result.Status {
 		case "success":
-            fmt.Fprintf(file, "Crawled: %s (Depth: %d)\n", result.Job.Link, result.Job.Depth)
+            //fmt.Fprintf(file, "Crawled: %s (Depth: %d)\n", result.Job.Link, result.Job.Depth)
             c.MarkAsCrawled(result.Job.Link, result.Job.Depth)
 			newDepth := result.Job.Depth + 1
             for _, link := range result.Links {
-                fmt.Fprintf(file, "\tfound: %s\n", link)
+                //fmt.Fprintf(file, "\tfound: %s\n", link)
                 // Add new jobs to the crawler's queue
                 if newDepth < 255 {
                     c.AddJobIfNotVisited(link, 0, newDepth)
@@ -144,9 +161,9 @@ func resultProcessor(resultChan <-chan CrawlResult, file *os.File, c *crawler.Cr
             }
         case "not_allowed":
 
-			fmt.Fprintf(file, "Request to %s is not allowed\n", result.Job.Link)
+			//fmt.Fprintf(file, "Request to %s is not allowed\n", result.Job.Link)
 		case "parse_error", "robots_error", "process_error":
-			fmt.Fprintf(file, "Error processing %s: %v\n", result.Job.Link, result.Error)
+			//fmt.Fprintf(file, "Error processing %s: %v\n", result.Job.Link, result.Error)
 			if (result.Job.Retries + 1 < crawler.MAX_RETRIES) {
 				c.AddJob(result.Job.Link, result.Job.Retries + 1, result.Job.Depth)
 			}
