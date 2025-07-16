@@ -51,7 +51,6 @@ func (dm *DomainMetaData) IsPathAllowed(link string, robots_pkg func(string, str
 
 // URLMetadataManager safely manages URL metadata.
 type URLMetadataManager struct {
-	mu         sync.Mutex
 	db         *mongo.Database
 	collection *mongo.Collection
 }
@@ -64,9 +63,6 @@ func NewURLMetadataManager(db *mongo.Database) *URLMetadataManager {
 }
 
 func (m *URLMetadataManager) Set(url string, metadata URLMetaData) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -115,15 +111,12 @@ func (m *URLMetadataManager) TestAndSet(url string, metadata URLMetaData) bool {
 
 // DomainMetadataManager safely manages domain metadata.
 type DomainMetadataManager struct {
-	mu   sync.Mutex
 	db         *mongo.Database
 	collection *mongo.Collection
-	Data map[string]DomainMetaData
 }
 
 func NewDomainMetadataManager(db *mongo.Database) *DomainMetadataManager {
 	return &DomainMetadataManager{
-		Data: make(map[string]DomainMetaData),
 		db: db,
 		collection: db.Collection("domains"),
 	}
