@@ -41,8 +41,8 @@ func main() {
 
 	db := client.Database("web-crawler")
 	
-	urls := crawler.NewURLMetadataManager(*db)
-	domains := crawler.NewDomainMetadataManager()
+	urls := crawler.NewURLMetadataManager(db)
+	domains := crawler.NewDomainMetadataManager(db)
 	queue := crawler.NewCrawlQueue()
 
 	crawlers := make([]*crawler.Crawler, NumWorkers+1)

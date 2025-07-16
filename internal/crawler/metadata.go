@@ -56,9 +56,9 @@ type URLMetadataManager struct {
 	collection *mongo.Collection
 }
 
-func NewURLMetadataManager(db mongo.Database) *URLMetadataManager {
+func NewURLMetadataManager(db *mongo.Database) *URLMetadataManager {
 	return &URLMetadataManager{
-		db:         &db,
+		db:         db,
 		collection: db.Collection("pages"),
 	}
 }
@@ -116,26 +116,42 @@ func (m *URLMetadataManager) TestAndSet(url string, metadata URLMetaData) bool {
 // DomainMetadataManager safely manages domain metadata.
 type DomainMetadataManager struct {
 	mu   sync.Mutex
+	db         *mongo.Database
+	collection *mongo.Collection
 	Data map[string]DomainMetaData
 }
 
-func NewDomainMetadataManager() *DomainMetadataManager {
+func NewDomainMetadataManager(db *mongo.Database) *DomainMetadataManager {
 	return &DomainMetadataManager{
 		Data: make(map[string]DomainMetaData),
+		db: db,
+		collection: db.Collection("domains"),
 	}
 }
 
-func (m *DomainMetadataManager) Set(domain string, metadata DomainMetaData) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.Data[domain] = metadata
+func (m *DomainMetadataManager) Set(domain string, metadata DomainMetaData) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := m.collection.ReplaceOne(ctx, bson.M{"domain": domain},
+		metadata,
+		options.Replace().SetUpsert(true))
+
+	return err
 }
 
 func (m *DomainMetadataManager) Get(domain string) (DomainMetaData, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	metadata, ok := m.Data[domain]
-	return metadata, ok
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    
+    var metadata DomainMetaData
+    err := m.collection.FindOne(ctx, bson.M{"domain": domain}).Decode(&metadata)
+    
+    if err != nil {
+        return DomainMetaData{}, false
+    }
+    
+    return metadata, true
 }
 
 // CrawlQueue safely manages the job queue.
