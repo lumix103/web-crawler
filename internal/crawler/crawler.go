@@ -97,6 +97,28 @@ func (c *Crawler) ProcessRobotFile(link string) (DomainMetaData, error) {
 	}, nil
 }
 
+func (c *Crawler) EnforceCrawlDelay(domain string, crawlDelay time.Duration) {
+    // Access the private 'domains' field safely within the method
+    c.domains.mu.Lock() // Use the existing mutex for safety
+    defer c.domains.mu.Unlock()
+
+    metadata, ok := c.domains.Data[domain]
+    if !ok {
+        // If no metadata, assume no delay (or fetch it here if needed)
+        return
+    }
+
+    now := time.Now()
+    nextAllowed := metadata.LastCrawlTime.Add(crawlDelay) // Use the stored delay
+    if now.Before(nextAllowed) {
+        time.Sleep(nextAllowed.Sub(now))
+    }
+
+    // Update last crawl time optimistically (refine to after successful crawl if possible)
+    metadata.LastCrawlTime = time.Now()
+    c.domains.Data[domain] = metadata
+}
+
 func (c *Crawler) ProcessJob(cj CrawlJob) ([]byte, error) {
 	req, err := http.NewRequest("GET", cj.Link, nil)
 	if err != nil {

@@ -127,8 +127,7 @@ func processJob(job crawler.CrawlJob, c *crawler.Crawler) CrawlResult {
 	}
 
 	// Respect crawl delay
-	time.Sleep(domainMetadata.CrawlDelay)
-
+	c.EnforceCrawlDelay(domain.Host, domainMetadata.CrawlDelay)
 	// Process the job
 	body, err := c.ProcessJob(job)
 	if err != nil {
