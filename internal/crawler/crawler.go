@@ -100,7 +100,8 @@ func (c *Crawler) ProcessRobotFile(link string) (DomainMetaData, error) {
 func (c *Crawler) EnforceCrawlDelay(domain string, crawlDelay time.Duration) {
     metadata, ok := c.domains.Get(domain)
     if !ok {
-        // If no metadata, assume no delay (or fetch it here if needed)
+        // If no metadata, assume 10 second delay (or fetch it here if needed)
+		time.Sleep(time.Second * 10)
         return
     }
 
