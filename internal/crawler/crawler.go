@@ -54,6 +54,16 @@ func (c *Crawler) AddJobIfNotVisited(link string, retries uint8, depth uint8) {
 }
 
 func (c *Crawler) ProcessRobotFile(link string) (DomainMetaData, error) {
+	u, err := url.Parse(link)
+	if err != nil {
+		return DomainMetaData{}, err
+	}
+
+	domain := u.Host
+	if metadata, ok := c.domains.Get(domain); ok {
+		return metadata, nil
+	}
+
 	req, err := http.NewRequest("GET", link, nil)
 	if err != nil {
 		return DomainMetaData{}, err
@@ -67,11 +77,16 @@ func (c *Crawler) ProcessRobotFile(link string) (DomainMetaData, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return DomainMetaData{
+		defaultDomainMetaData := DomainMetaData{
+			Domain: domain,
+			LastCrawlTime: time.Now(),
 			Disallow:   []string{},
 			Allow:      []string{},
 			CrawlDelay: 1 * time.Second, // Default politeness
-		}, nil
+		}
+
+		c.domains.Set(domain, defaultDomainMetaData)
+		return defaultDomainMetaData, nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -84,36 +99,26 @@ func (c *Crawler) ProcessRobotFile(link string) (DomainMetaData, error) {
 		crawlDelay = 1 * time.Second // Default politeness
 	}
 
-	u, err := url.Parse(link)
-	if err != nil {
-		return DomainMetaData{}, err
-	}
-
-	return DomainMetaData{
-		Domain:     u.Host,
+	parsedDomainMetaData := DomainMetaData{
+		Domain:     domain,
 		Disallow:   disallowRules,
 		Allow:      allowRules,
 		CrawlDelay: crawlDelay,
-	}, nil
+	}
+
+	c.domains.Set(domain, parsedDomainMetaData)
+	return parsedDomainMetaData, nil
 }
 // Fix this later but if this fails then we should not crawl at all
-func (c *Crawler) EnforceCrawlDelay(domain string, crawlDelay time.Duration) {
-    metadata, ok := c.domains.Get(domain)
-    if !ok {
-        // If no metadata, assume 10 second delay (or fetch it here if needed)
-		time.Sleep(time.Second * 10)
-        return
-    }
-
+func (c *Crawler) EnforceCrawlDelay(domainMetadata DomainMetaData) {
     now := time.Now()
-    nextAllowed := metadata.LastCrawlTime.Add(crawlDelay) // Use the stored delay
+    nextAllowed := domainMetadata.LastCrawlTime.Add(domainMetadata.CrawlDelay) // Use the stored delay
     if now.Before(nextAllowed) {
         time.Sleep(nextAllowed.Sub(now))
     }
 
-    // Update last crawl time optimistically (refine to after successful crawl if possible)
-    metadata.LastCrawlTime = time.Now()
-	c.domains.Set(domain, metadata)
+    domainMetadata.LastCrawlTime = time.Now()
+	c.domains.Set(domainMetadata.Domain, domainMetadata)
 }
 
 func (c *Crawler) ProcessJob(cj CrawlJob) ([]byte, error) {

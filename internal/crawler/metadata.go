@@ -2,6 +2,7 @@ package crawler
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -56,9 +57,25 @@ type URLMetadataManager struct {
 }
 
 func NewURLMetadataManager(db *mongo.Database) *URLMetadataManager {
+	collection := db.Collection("pages")
+	
+	// Create unique index on link field
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	indexModel := mongo.IndexModel{
+		Keys:    bson.D{{Key: "link", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}
+	
+	_, err := collection.Indexes().CreateOne(ctx, indexModel)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create link index: %v", err))
+	}
+	
 	return &URLMetadataManager{
 		db:         db,
-		collection: db.Collection("pages"),
+		collection: collection,
 	}
 }
 
@@ -116,9 +133,25 @@ type DomainMetadataManager struct {
 }
 
 func NewDomainMetadataManager(db *mongo.Database) *DomainMetadataManager {
+	collection := db.Collection("domains")
+	
+	// Create unique index on domain field
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	indexModel := mongo.IndexModel{
+		Keys:    bson.D{{Key: "domain", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}
+	
+	_, err := collection.Indexes().CreateOne(ctx, indexModel)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create domain index: %v", err))
+	}
+	
 	return &DomainMetadataManager{
-		db: db,
-		collection: db.Collection("domains"),
+		db:         db,
+		collection: collection,
 	}
 }
 

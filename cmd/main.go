@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/url"
 	"os"
 	"sync"
@@ -58,6 +59,9 @@ func main() {
 	var wg sync.WaitGroup
 	for i := 0; i < NumWorkers; i++ {
 		wg.Add(1)
+		// Added some jitter to prevent some crawl issue since there is only one queue in the initial job
+        jitter := time.Duration(rand.Intn(100)) * time.Millisecond
+        time.Sleep(jitter)
 		go worker(i, resultChan, crawlers[i], &wg)
 	}
 
@@ -127,7 +131,7 @@ func processJob(job crawler.CrawlJob, c *crawler.Crawler) CrawlResult {
 	}
 
 	// Respect crawl delay
-	c.EnforceCrawlDelay(domain.Host, domainMetadata.CrawlDelay)
+	c.EnforceCrawlDelay(domainMetadata)
 	// Process the job
 	body, err := c.ProcessJob(job)
 	if err != nil {
