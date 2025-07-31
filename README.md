@@ -50,13 +50,13 @@ The crawler starts with Wikipedia as a seed URL and outputs the fetched HTML con
 - [x] Robots.txt compliance
 - [x] Domain-specific rate limiting
 - [x] Concurrent processing with goroutines
-- [ ] External queue system integration (SQS/Kafka) (Moved to another branch)
+- [x] External queue system integration (SQS/Kafka)
 
 ## Configuration
 
 - **Timeout**: 1 second HTTP timeout
 - **Max Retries**: 10 retry attempts per URL
-- **User Agent**: `fabs_bot/1.0`
+- **User Agent**: `fabs_bot/2.0`
 
 ## Requirements
 

@@ -2,14 +2,20 @@ package crawler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"sync"
+	"strconv"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 )
 
 type URLMetaData struct {
@@ -30,10 +36,9 @@ type DomainMetaData struct {
 }
 
 type CrawlJob struct {
-	ID      primitive.ObjectID `bson:"_id,omitempty"`
-	Link    string             `bson:"link"`
-	Retries uint8              `bson:"retries"`
-	Depth   uint8              `bson:"depth"`
+	Link    string `json:"link"`
+	Retries uint8  `json:"retries"`
+	Depth   uint8  `json:"depth"`
 }
 
 func (dm *DomainMetaData) IsPathAllowed(link string, robots_pkg func(string, string) bool) bool {
@@ -182,29 +187,156 @@ func (m *DomainMetadataManager) Get(domain string) (DomainMetaData, bool) {
 
 // CrawlQueue safely manages the job queue.
 type CrawlQueue struct {
-	mu   sync.Mutex
-	jobs []CrawlJob
+	sqsClient *sqs.Client
+	queueURL  string
+	ctx       context.Context
 }
 
-func NewCrawlQueue() *CrawlQueue {
+// NewCrawlQueue creates a new SQS-backed crawl queue
+func NewCrawlQueue(queueURL string) (*CrawlQueue, error) {
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
 	return &CrawlQueue{
-		jobs: make([]CrawlJob, 0),
+		sqsClient: sqs.NewFromConfig(cfg),
+		queueURL:  queueURL,
+		ctx:       context.Background(),
+	}, nil
+}
+
+// NewCrawlQueueWithConfig creates a new queue with custom AWS config
+func NewCrawlQueueWithConfig(queueURL string, cfg aws.Config) *CrawlQueue {
+	return &CrawlQueue{
+		sqsClient: sqs.NewFromConfig(cfg),
+		queueURL:  queueURL,
+		ctx:       context.Background(),
 	}
 }
 
-func (q *CrawlQueue) Add(job CrawlJob) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.jobs = append(q.jobs, job)
+// Add sends a job to the SQS queue
+func (q *CrawlQueue) Add(job CrawlJob) error {
+	jobData, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("failed to marshal job: %w", err)
+	}
+
+	_, err = q.sqsClient.SendMessage(q.ctx, &sqs.SendMessageInput{
+		QueueUrl: aws.String(q.queueURL),
+		MessageBody: aws.String(string(jobData)),
+		MessageAttributes: map[string]types.MessageAttributeValue{
+			"Retries": {
+				DataType:    aws.String("Number"),
+				StringValue: aws.String(strconv.Itoa(int(job.Retries))),
+			},
+			"Depth": {
+				DataType:    aws.String("Number"),
+				StringValue: aws.String(strconv.Itoa(int(job.Depth))),
+			},
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send message to SQS: %w", err)
+	}
+
+	return nil
 }
 
+// Next receives and processes the next job from the SQS queue
 func (q *CrawlQueue) Next() (CrawlJob, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.jobs) == 0 {
+	result, err := q.sqsClient.ReceiveMessage(q.ctx, &sqs.ReceiveMessageInput{
+		QueueUrl:            aws.String(q.queueURL),
+		MaxNumberOfMessages: 1,
+		WaitTimeSeconds:     1, // Short polling - adjust as needed
+		MessageAttributeNames: []string{"All"},
+	})
+
+	if err != nil || len(result.Messages) == 0 {
 		return CrawlJob{}, false
 	}
-	job := q.jobs[0]
-	q.jobs = q.jobs[1:]
+
+	message := result.Messages[0]
+	var job CrawlJob
+
+	if err := json.Unmarshal([]byte(*message.Body), &job); err != nil {
+		// Log error and delete malformed message
+		q.deleteMessage(*message.ReceiptHandle)
+		return CrawlJob{}, false
+	}
+
+	// Delete the message from the queue after successful processing
+	if err := q.deleteMessage(*message.ReceiptHandle); err != nil {
+		// Log error but continue - message will become visible again
+		// after visibility timeout
+	}
+
 	return job, true
+}
+
+// deleteMessage removes a processed message from the queue
+func (q *CrawlQueue) deleteMessage(receiptHandle string) error {
+	_, err := q.sqsClient.DeleteMessage(q.ctx, &sqs.DeleteMessageInput{
+		QueueUrl:      aws.String(q.queueURL),
+		ReceiptHandle: aws.String(receiptHandle),
+	})
+	return err
+}
+
+// AddBatch adds multiple jobs efficiently using SQS batch operations
+func (q *CrawlQueue) AddBatch(jobs []CrawlJob) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+
+	// SQS batch limit is 10 messages
+	const batchSize = 10
+	
+	for i := 0; i < len(jobs); i += batchSize {
+		end := i + batchSize
+		if end > len(jobs) {
+			end = len(jobs)
+		}
+
+		batch := jobs[i:end]
+		if err := q.sendBatch(batch); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (q *CrawlQueue) sendBatch(jobs []CrawlJob) error {
+	entries := make([]types.SendMessageBatchRequestEntry, len(jobs))
+	
+	for i, job := range jobs {
+		jobData, err := json.Marshal(job)
+		if err != nil {
+			return fmt.Errorf("failed to marshal job %d: %w", i, err)
+		}
+
+		entries[i] = types.SendMessageBatchRequestEntry{
+			Id:          aws.String(fmt.Sprintf("job_%d", i)),
+			MessageBody: aws.String(string(jobData)),
+			MessageAttributes: map[string]types.MessageAttributeValue{
+				"Retries": {
+					DataType:    aws.String("Number"),
+					StringValue: aws.String(strconv.Itoa(int(job.Retries))),
+				},
+				"Depth": {
+					DataType:    aws.String("Number"),
+					StringValue: aws.String(strconv.Itoa(int(job.Depth))),
+				},
+			},
+		}
+	}
+
+	_, err := q.sqsClient.SendMessageBatch(q.ctx, &sqs.SendMessageBatchInput{
+		QueueUrl: aws.String(q.queueURL),
+		Entries:  entries,
+	})
+
+	return err
 }

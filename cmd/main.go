@@ -25,33 +25,47 @@ const (
 
 func main() {
 	err := godotenv.Load()
-
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
+	defer cancel()
 
-
-    client, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGODB_URI")))
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer client.Disconnect(ctx)
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGODB_URI")))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Disconnect(ctx)
 
 	db := client.Database("web-crawler")
 	
 	urls := crawler.NewURLMetadataManager(db)
 	domains := crawler.NewDomainMetadataManager(db)
-	queue := crawler.NewCrawlQueue()
+	
+	sqsQueueURL := os.Getenv("SQS_QUEUE_URL")
+	if sqsQueueURL == "" {
+		log.Fatal("SQS_QUEUE_URL environment variable is required")
+	}
+	
+	queue, err := crawler.NewCrawlQueue(sqsQueueURL)
+	if err != nil {
+		log.Fatalf("Failed to create crawl queue: %v", err)
+	}
 
 	crawlers := make([]*crawler.Crawler, NumWorkers+1)
 	for i := 0; i < NumWorkers+1; i++ {
 		crawlers[i] = crawler.NewCrawler("fabs_bot/2.0", urls, domains, queue)
 	}
 
-	queue.Add(crawler.CrawlJob{Link: "https://en.wikipedia.org/wiki/Web_crawler", Retries: 0, Depth: 0})
+	initialJob := crawler.CrawlJob{
+		Link:    "https://en.wikipedia.org/wiki/Web_crawler",
+		Retries: 0,
+		Depth:   0,
+	}
+	if err := queue.Add(initialJob); err != nil {
+		log.Fatalf("Failed to add initial job: %v", err)
+	}
 
 	resultChan := make(chan CrawlResult, MaxJobs)
 	doneChan := make(chan struct{})
@@ -60,8 +74,8 @@ func main() {
 	for i := 0; i < NumWorkers; i++ {
 		wg.Add(1)
 		// Added some jitter to prevent some crawl issue since there is only one queue in the initial job
-        jitter := time.Duration(rand.Intn(100)) * time.Millisecond
-        time.Sleep(jitter)
+		jitter := time.Duration(rand.Intn(100)) * time.Millisecond
+		time.Sleep(jitter)
 		go worker(i, resultChan, crawlers[i], &wg)
 	}
 
@@ -152,23 +166,22 @@ func resultProcessor(resultChan <-chan CrawlResult, c *crawler.Crawler, doneChan
 	for result := range resultChan {
 		switch result.Status {
 		case "success":
-            //fmt.Fprintf(file, "Crawled: %s (Depth: %d)\n", result.Job.Link, result.Job.Depth)
-            c.MarkAsCrawled(result.Job.Link, result.Job.Depth)
+			//fmt.Fprintf(file, "Crawled: %s (Depth: %d)\n", result.Job.Link, result.Job.Depth)
+			c.MarkAsCrawled(result.Job.Link, result.Job.Depth)
 			newDepth := result.Job.Depth + 1
-            for _, link := range result.Links {
-                //fmt.Fprintf(file, "\tfound: %s\n", link)
-                // Add new jobs to the crawler's queue
-                if newDepth < 255 {
-                    c.AddJobIfNotVisited(link, 0, newDepth)
-                }
-            }
-        case "not_allowed":
-
+			for _, link := range result.Links {
+				//fmt.Fprintf(file, "\tfound: %s\n", link)
+				// Add new jobs to the crawler's queue
+				if newDepth < 255 {
+					c.AddJobIfNotVisited(link, 0, newDepth)
+				}
+			}
+		case "not_allowed":
 			//fmt.Fprintf(file, "Request to %s is not allowed\n", result.Job.Link)
 		case "parse_error", "robots_error", "process_error":
 			//fmt.Fprintf(file, "Error processing %s: %v\n", result.Job.Link, result.Error)
-			if (result.Job.Retries + 1 < crawler.MAX_RETRIES) {
-				c.AddJob(result.Job.Link, result.Job.Retries + 1, result.Job.Depth)
+			if result.Job.Retries+1 < crawler.MAX_RETRIES {
+				c.AddJob(result.Job.Link, result.Job.Retries+1, result.Job.Depth)
 			}
 		}
 	}
